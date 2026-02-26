@@ -1,0 +1,415 @@
+---
+title: "Lab 6: Value of Information"
+subtitle: "CEVE 421/521"
+date: 2026-02-27
+engine: julia
+status: draft
+
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-block-bg: "#f8f8f8"
+    code-block-border-left: "#e1e4e5"
+    theme:
+      - simplex
+      - _assets/sass/custom.scss
+    number-sections: true
+    fig-format: svg
+  typst:
+    fontsize: 11pt
+    margin:
+      x: 1in
+      y: 1in
+    number-sections: true
+    fig-format: svg
+
+execute:
+  exeflags: ["+1.12", "--project=@.", "--threads=auto"]
+  cache: true
+  freeze: auto
+
+code-overflow: wrap
+code-line-numbers: false
+code-block-font-size: "0.85em"
+code-annotations: below
+---
+
+## Overview
+
+In Labs 4 and 5 you found optimal flood defenses for a city.
+Today we switch scales: a **homeowner in Norfolk, VA** must decide how high to elevate their house above the floodplain.
+
+The key uncertainty is **sea-level rise (SLR)**, which depends on the global emissions pathway.
+Two futures are possible:
+
+1. **Aggressive mitigation (RCP 2.6)** — the world cuts emissions sharply, SLR stays modest.
+2. **Business as usual (RCP 8.5)** — emissions continue growing, SLR accelerates.
+
+The homeowner doesn't know which pathway the world will follow, but must decide on an elevation height **now** (construction happens once).
+Today you'll compute the **Expected Value of Perfect Information (EVPI)** and the **Expected Value of Imperfect Information (EVII)** to determine how much it's worth to learn about future emissions before committing.
+
+
+**References:**
+
+- [SimOptDecisions documentation](https://dossgollin-lab.github.io/SimOptDecisions/) — the optimization framework
+- @ruckert_flood:2019 — BRICK sea-level rise projections
+- @zarekarizi_suboptimal:2020 — house elevation cost model
+
+## Before Lab
+
+**Complete these steps BEFORE coming to lab:**
+
+1. **Accept the GitHub Classroom assignment** (link on Canvas)
+
+2. **Clone your repository:**
+
+   ```bash
+   git clone https://github.com/CEVE-421-521/lab-06-S26-yourusername.git
+   cd lab-06-S26-yourusername
+   ```
+
+3. **Open the notebook** in VS Code or Quarto preview
+
+4. **Run the first code cell** — it will automatically install any missing packages (this may take 10-15 minutes the first time)
+
+::: {.callout-important}
+**Submission:** You will render this notebook to PDF and submit the PDF to Canvas.
+See @sec-submission for details.
+:::
+
+::: {.callout-note}
+**Computation note:** This lab uses deterministic trapezoidal integration (not Monte Carlo), so all cells should run in a few seconds.
+:::
+
+## Setup
+
+### Load Packages
+
+```{julia}
+#| output: false
+#| code-fold: true
+#| code-summary: "Package installation (click to expand)"
+# install SimOptDecisions
+try
+    using SimOptDecisions
+catch
+    import Pkg
+    try
+        Pkg.rm("SimOptDecisions")
+    catch
+    end
+    Pkg.add(; url="https://github.com/dossgollin-lab/SimOptDecisions")
+    Pkg.instantiate()
+    using SimOptDecisions
+end
+```
+
+```{julia}
+#| output: false
+using CairoMakie
+using CSV
+using DataFrames
+using Distributions
+using Interpolations
+using NetCDF
+using Random
+using Statistics
+
+include("house_elevation.jl")
+```
+
+### Build the House
+
+We use a HAZUS depth-damage function for a single-story house with no basement, typical of Norfolk's coastal housing stock.
+The house sits at 8 ft above the local tide gauge.
+
+```{julia}
+#| output: false
+#| code-fold: true
+#| code-summary: "House construction (click to expand)"
+haz_fl_dept = CSV.read("data/haz_fl_dept.csv", DataFrame)
+
+# Single-story, no basement, A-Zone (FIA DmgFnId 105)
+ddf_row = filter(r -> r.DmgFnId == 105, haz_fl_dept)[1, :]
+
+house = House(
+    ddf_row;
+    value_usd=250_000,     # house value
+    area_ft2=1_500,        # floor area
+    height_above_gauge_ft=8.0,  # first-floor elevation above tide gauge
+)
+```
+
+### Sea-Level Rise from BRICK
+
+We load BRICK sea-level rise projections [@ruckert_flood:2019] for Sewells Point, Norfolk, VA.
+The BRICK ensemble contains thousands of SLR trajectories under each RCP scenario.
+
+The two states of the world correspond to the **emissions pathway** the world follows:
+
+1. **RCP 2.6** — aggressive mitigation (10th percentile of BRICK ensemble)
+2. **RCP 8.5** — business as usual (90th percentile of BRICK ensemble)
+
+We use tail percentiles (not ensemble means) to sharpen the contrast: RCP 2.6 with a low climate response, vs RCP 8.5 with a high climate response.
+
+```{julia}
+#| output: false
+#| code-fold: true
+#| code-summary: "Load BRICK projections (click to expand)"
+const M_TO_FT = 3.28084
+
+slr_data = let
+    slr_nc = joinpath(@__DIR__, "data", "sea_level_projections.nc")
+    brick_years = Int.(ncread(slr_nc, "time"))
+    brick_slr = Float64.(ncread(slr_nc, "brick_slr"))  # (time, ensemble, rcp)
+    rcps = ["rcp26", "rcp45", "rcp60", "rcp85"]
+    (years=brick_years, slr=brick_slr, rcps=rcps)
+end
+
+function brick_percentile(data, rcp, p)
+    idx = findfirst(==(rcp), data.rcps)
+    ensemble = data.slr[:, :, idx]
+    return [quantile(ensemble[t, :], p) for t in axes(ensemble, 1)]
+end
+
+slr_low_m = brick_percentile(slr_data, "rcp26", 0.10)   # optimistic: low emissions + low sensitivity
+slr_high_m = brick_percentile(slr_data, "rcp85", 0.90)   # pessimistic: high emissions + high sensitivity
+```
+
+```{julia}
+#| output: false
+# Prior: 50/50 chance of high vs low emissions
+p_high = 0.5
+p_low = 1 - p_high
+
+# Fixed parameters
+surge_dist = GeneralizedExtremeValue(3.0, 1.5, 0.1)  # annual max storm surge (ft)
+discount_rate = 0.04
+years = collect(2026:2100)  # 75-year planning horizon
+
+# Map BRICK years to our planning horizon and convert to feet
+brick_year_start = findfirst(==(2026), slr_data.years)
+brick_year_end = findfirst(==(2100), slr_data.years)
+slr_low_ft = slr_low_m[brick_year_start:brick_year_end] .* M_TO_FT
+slr_high_ft = slr_high_m[brick_year_start:brick_year_end] .* M_TO_FT
+
+# Build configs and scenarios
+config = HouseConfig(house, years, surge_dist)
+scenario_low = SLRScenario(slr_low_ft, discount_rate)
+scenario_high = SLRScenario(slr_high_ft, discount_rate)
+```
+
+```{julia}
+#| label: fig-slr
+#| fig-cap: "BRICK SLR projections. Blue: RCP 2.6, 10th percentile (optimistic). Red: RCP 8.5, 90th percentile (pessimistic). Dashed lines mark the planning horizon."
+let
+    yr = slr_data.years
+    fig = Figure(; size=(700, 350))
+    ax = Axis(
+        fig[1, 1];
+        xlabel="Year",
+        ylabel="Sea Level Rise (ft)",
+        title="Sea-Level Rise: RCP 2.6 (P10) vs RCP 8.5 (P90)",
+    )
+    lines!(ax, yr, slr_low_m .* M_TO_FT; color=:blue, linewidth=2, label="RCP 2.6 P10 (optimistic)")
+    lines!(ax, yr, slr_high_m .* M_TO_FT; color=:red, linewidth=2, label="RCP 8.5 P90 (pessimistic)")
+    vlines!(ax, [2026, 2100]; color=:gray, linestyle=:dot, alpha=0.5)
+    axislegend(ax; position=:lt)
+    fig
+end
+```
+
+## Build the Payoff Table
+
+We sweep a grid of elevation heights and compute total cost (construction + NPV of expected flood damages) under each SLR future.
+
+```{julia}
+#| output: false
+height_grid = 0.0:0.5:14.0
+
+costs_low = [compute_total_cost(config, scenario_low, h) for h in height_grid]
+costs_high = [compute_total_cost(config, scenario_high, h) for h in height_grid]
+costs_prior = p_high .* costs_high .+ p_low .* costs_low
+```
+
+```{julia}
+#| label: fig-payoff
+#| fig-cap: "Total cost (construction + NPV of expected damages) vs. elevation height under each emissions pathway. Blue: RCP 2.6. Red: RCP 8.5. Dashed black: prior-weighted average (50/50). Stars mark the optimum for each curve."
+let
+    fig = Figure(; size=(700, 450))
+    ax = Axis(
+        fig[1, 1];
+        xlabel="Elevation Height (ft)",
+        ylabel="Total Cost (USD)",
+        title="Payoff Table: Elevation Decision Under SLR Uncertainty",
+    )
+
+    hg = collect(height_grid)
+    lines!(ax, hg, costs_low; color=:blue, linewidth=2, label="RCP 2.6 (mitigation)")
+    lines!(ax, hg, costs_high; color=:red, linewidth=2, label="RCP 8.5 (business as usual)")
+    lines!(ax, hg, costs_prior; color=:black, linewidth=2, linestyle=:dash, label="Prior (50/50)")
+
+    # Mark optima
+    idx_low = argmin(costs_low)
+    idx_high = argmin(costs_high)
+    idx_prior = argmin(costs_prior)
+
+    scatter!(ax, [hg[idx_low]], [costs_low[idx_low]]; color=:blue, markersize=15, marker=:star5)
+    scatter!(ax, [hg[idx_high]], [costs_high[idx_high]]; color=:red, markersize=15, marker=:star5)
+    scatter!(ax, [hg[idx_prior]], [costs_prior[idx_prior]]; color=:black, markersize=15, marker=:star5)
+
+    axislegend(ax; position=:rt)
+    fig
+end
+```
+
+::: {.callout-tip appearance="simple" icon=false title="Your Response — Question 1"}
+*Look at @fig-payoff.*
+
+1. *How do the optimal elevation heights differ between the two SLR futures? Why does this make intuitive sense?*
+2. *Why are the cost curves U-shaped? What happens at very low vs. very high elevation?*
+:::
+
+
+## Computing EVPI
+
+Use the payoff table to compute the Expected Value of Perfect Information.
+Since we're minimizing cost (not maximizing utility), the formula uses $\min$ instead of $\max$:
+
+$$
+\text{EVPI} = \underbrace{\min_a \sum_s p(s) \cdot C(a, s)}_{\text{cost without info}} - \underbrace{\sum_s p(s) \cdot \min_a C(a, s)}_{\text{cost with perfect info}}
+$$
+
+where $a$ is the elevation height, $s$ is the SLR state, $p(s)$ is the prior probability, and $C(a, s)$ is total cost.
+
+```{julia}
+# Your code here
+```
+
+```{julia}
+#| label: tbl-evpi
+#| tbl-cap: "EVPI for the elevation decision under SLR uncertainty"
+# Your code here
+```
+
+::: {.callout-tip appearance="simple" icon=false title="Your Response — Question 2"}
+*Look at @tbl-evpi.*
+
+1. *Interpret the EVPI in dollars. How much would this homeowner pay for a perfect forecast of the future emissions pathway?*
+2. *What fraction of the house value ($250,000) does the EVPI represent?*
+3. *Is this EVPI large enough to justify funding climate policy research? What other homeowners might benefit from the same information?*
+:::
+
+
+## Computing EVII
+
+Suppose an international **Climate Policy Progress Report** rates the likelihood of meeting Paris Agreement goals as either "on track" or "off track."
+The report isn't perfectly accurate: it tends to say "on track" when emissions are following RCP 2.6, and "off track" when following RCP 8.5, but it sometimes gets it wrong.
+
+### Signal Accuracy
+
+```{julia}
+#| output: false
+p_offtrack_given_85 = 0.85   # P(report = "off track" | RCP 8.5)
+p_ontrack_given_26 = 0.90    # P(report = "on track" | RCP 2.6)
+```
+
+### Exercise: Bayes' Rule
+
+Use Bayes' rule to compute the posterior probability of RCP 8.5 given each report signal.
+
+```{julia}
+# Your code here
+```
+
+### Exercise: EVII
+
+Re-weight the payoff table using the posterior probabilities and compute EVII.
+No new simulations needed — just re-weight the same cost arrays with updated beliefs.
+
+$$
+\text{EVII} = \underbrace{\min_a \sum_s p(s) \cdot C(a, s)}_{\text{cost without info}} - \underbrace{\sum_z p(z) \min_a \sum_s p(s|z) \cdot C(a, s)}_{\text{cost with signal}}
+$$
+
+where $z$ is the report signal and $p(s|z)$ is the posterior from Bayes' rule.
+
+```{julia}
+# Your code here
+```
+
+```{julia}
+#| label: tbl-voi
+#| tbl-cap: "Summary of information value: no information, policy report, and perfect information"
+# Your code here
+```
+
+```{julia}
+#| label: fig-evii
+#| fig-cap: "Posterior-weighted cost curves after the policy report. Green: 'off track' signal shifts beliefs toward RCP 8.5. Orange: 'on track' signal shifts beliefs toward RCP 2.6. Stars mark the conditional optima."
+# Your code here
+```
+
+::: {.callout-tip appearance="simple" icon=false title="Your Response — Question 3"}
+*What fraction of the EVPI does the policy report capture?
+Why is EVII < EVPI?
+What would make the report more valuable?*
+:::
+
+
+::: {.callout-tip appearance="simple" icon=false title="Your Response — Question 4"}
+*The homeowner is considering two research investments:*
+
+1. *Fund a climate policy analysis that would perfectly predict the future emissions pathway.*
+2. *Fund a tide gauge network that would reduce storm surge uncertainty.*
+
+*Based on your EVPI result, what is the maximum value of investment (1)?
+Why might investment (2) have a different (possibly larger or smaller) ceiling?*
+:::
+
+
+## Extensions (Optional) {.unnumbered}
+
+If you finish early, try one of these:
+
+- **Change the prior:** What happens to EVPI if RCP 8.5 is 80% likely instead of 50/50? At what prior does EVPI become negligible?
+- **Change signal accuracy:** What if the policy report is only 60% accurate? 99% accurate? Plot EVII vs. accuracy.
+- **More RCP scenarios:** Add RCP 4.5 and RCP 6.0 as additional states. How does EVPI change with more emissions pathways?
+
+## Summary
+
+Key takeaways from this lab:
+
+1. **EVPI** is the gap between "optimize then average" and "average then optimize" — the maximum value of any information source about a given uncertainty.
+2. **EVII** extends EVPI to imperfect signals via Bayes' rule — re-weight the same payoff table with posterior beliefs, no new simulations needed.
+3. **Information is only valuable when it changes the optimal decision.** If the optimal action is the same regardless of the state, EVPI is zero.
+4. The EVPI for one uncertainty bounds the value of any research into that uncertainty — use it to prioritize research investments.
+
+## Submission {#sec-submission}
+
+1. Write your answers in the response boxes above.
+2. **Render to PDF:**
+   - In VS Code: Open the command palette (`Cmd+Shift+P` / `Ctrl+Shift+P`) → "Quarto: Render Document" → select Typst PDF
+   - Or from the terminal: `quarto render index.qmd --to typst`
+3. **Submit the PDF** to the Lab 6 assignment on Canvas.
+4. **Push your code** to GitHub (for backup):
+
+   ```bash
+   git add -A && git commit -m "Lab 6 complete" && git push
+   ```
+
+## Checklist {.unnumbered}
+
+Before submitting:
+
+- [ ] Packages load without error
+- [ ] SLR trajectories plotted (@fig-slr)
+- [ ] Payoff table visualized (@fig-payoff)
+- [ ] Question 1 answered (interpret cost curves)
+- [ ] EVPI computed (@tbl-evpi)
+- [ ] Question 2 answered (interpret EVPI)
+- [ ] Bayes' rule posteriors computed
+- [ ] EVII computed and summary table generated (@tbl-voi)
+- [ ] EVII visualization (@fig-evii)
+- [ ] Questions 3 and 4 answered
+- [ ] Notebook renders to PDF without errors

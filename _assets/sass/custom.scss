@@ -1,0 +1,213 @@
+/*-- scss:defaults --*/
+
+// Rice University Brand Colors
+// https://brand.rice.edu/university-colors
+$rice-blue: #00205B;
+$rice-gray: #7C7E7F;
+
+// Extended palette
+// https://brand.rice.edu/extended-palette
+$light-blue-gray: #ADC7DC;
+$light-gray: #E0E2E6;
+$bright-blue: #9FDDF9;
+$medium-blue: #4D9AD4;
+$rich-blue: #0A509E;
+$midnight-blue: #13133E;
+$dark-gray: #44474F;
+$dark-blue-gray: #303B61;
+
+// Campus-inspired palette
+// https://brand.rice.edu/campus-inspired-palette
+$warm-yellow: #E9A139;
+$brick-red: #C04829;
+$burgundy: #68132E;
+$shadow-purple: #362E52;
+$leaf-emerald: #005B50;
+$tree-green: #00432C;
+$grass-green: #359245;
+$bright-green: #A5C151;
+
+// Override Bootstrap/Spacelab variables
+$primary: $rice-blue;
+$link-color: $rich-blue;
+$link-hover-color: $medium-blue;
+
+/*-- scss:rules --*/
+
+// Hero section styling
+.hero-banner {
+  background: linear-gradient(135deg, $rice-blue 0%, $midnight-blue 100%);
+  color: white !important;
+  padding: 3rem 2rem;
+  margin: -1rem -1rem 2rem -1rem;
+  border-radius: 0 0 1rem 1rem;
+
+  h1, h2, h3, p {
+    color: white !important;
+  }
+
+  h1 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+    border-bottom: none;
+  }
+
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 400;
+    opacity: 0.9;
+    margin-bottom: 1rem;
+    border-bottom: none;
+  }
+
+  p {
+    font-size: 1.2rem;
+    opacity: 0.95;
+    margin-bottom: 0;
+  }
+}
+
+// Card styling for content sections
+.content-card {
+  background: white;
+  border: 1px solid $light-gray;
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  transition: box-shadow 0.2s ease;
+
+  &:hover {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  h2, h3 {
+    color: $rice-blue;
+    border-bottom: 2px solid $grass-green;
+    padding-bottom: 0.5rem;
+    margin-bottom: 1rem;
+  }
+}
+
+// Callout customization
+.callout-note {
+  border-left-color: $medium-blue;
+}
+
+.callout-warning {
+  border-left-color: $warm-yellow;
+}
+
+.callout-important {
+  border-left-color: $brick-red;
+}
+
+.callout-tip {
+  border-left-color: $grass-green;
+}
+
+// Custom styling for student response callouts
+// Usage: ::: {.callout-tip .response appearance="simple" icon=false title="Your Response"}
+.callout-tip.callout-style-simple {
+  &:has(.callout-title-container:first-child) {
+    border-left-color: $shadow-purple;
+    background-color: rgba($shadow-purple, 0.05);
+  }
+}
+
+// Alternative: style all simple tip callouts distinctly for labs
+.callout.callout-style-simple[data-callout="tip"] {
+  border-left-color: $shadow-purple;
+  background-color: rgba($shadow-purple, 0.05);
+
+  .callout-title {
+    color: $shadow-purple;
+    font-weight: 600;
+  }
+
+  .callout-body {
+    font-style: italic;
+    color: $dark-gray;
+  }
+}
+
+// Code block enhancements
+div.sourceCode {
+  border-left: 3px solid $grass-green;
+  border-radius: 0.25rem;
+}
+
+pre.sourceCode {
+  background-color: #f8f9fa;
+}
+
+// Headings with accent
+.content h1 {
+  color: $rice-blue;
+}
+
+.content h2 {
+  color: $rice-blue;
+  border-bottom: 2px solid $light-gray;
+  padding-bottom: 0.25rem;
+}
+
+// Sidebar enhancements (subtle)
+.sidebar-title {
+  color: $rice-blue;
+}
+
+// Table of contents accent
+.sidebar nav[role=doc-toc] > ul a.active {
+  border-left-color: $grass-green;
+}
+
+// Footer styling
+.nav-footer {
+  border-top: 3px solid $grass-green;
+}
+
+// Badge/label styling for schedule
+.badge-lecture {
+  background-color: $rice-blue;
+}
+
+.badge-lab {
+  background-color: $grass-green;
+}
+
+.badge-assignment {
+  background-color: $warm-yellow;
+  color: $rice-blue;
+}
+
+.badge-exam {
+  background-color: $brick-red;
+}
+
+// Draft material styling for schedule
+.draft-material {
+  opacity: 0.6;
+
+  a {
+    color: $rice-gray !important;
+
+    &:hover {
+      color: $dark-gray !important;
+    }
+  }
+}
+
+.draft-badge {
+  font-size: 0.7em;
+  background-color: $warm-yellow;
+  color: $rice-blue;
+  padding: 0.15em 0.5em;
+  border-radius: 0.25rem;
+  margin-left: 0.3em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+}

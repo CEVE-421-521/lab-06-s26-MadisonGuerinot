@@ -1,0 +1,23 @@
+# Julia environment
+Manifest.toml
+
+# Quarto outputs
+*.html
+*.pdf
+*.typ
+*.docx
+
+# Quarto cache and intermediate files
+/.quarto/
+/_site/
+/_freeze/
+.cache/
+*_files/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS files
+.DS_Store
+Thumbs.db
