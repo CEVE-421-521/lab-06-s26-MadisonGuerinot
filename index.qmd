@@ -53,8 +53,8 @@ Today you'll compute the **Expected Value of Perfect Information (EVPI)** and th
 **References:**
 
 - [SimOptDecisions documentation](https://dossgollin-lab.github.io/SimOptDecisions/) — the optimization framework
-- @ruckert_flood:2019 — BRICK sea-level rise projections
-- @zarekarizi_suboptimal:2020 — house elevation cost model
+- ruckert_flood:2019 — BRICK sea-level rise projections
+- zarekarizi_suboptimal:2020 — house elevation cost model
 
 ## Before Lab
 
@@ -143,7 +143,7 @@ house = House(
 
 ### Sea-Level Rise from BRICK
 
-We load BRICK sea-level rise projections [@ruckert_flood:2019] for Sewells Point, Norfolk, VA.
+We load BRICK sea-level rise projections [ruckert_flood:2019] for Sewells Point, Norfolk, VA.
 The BRICK ensemble contains thousands of SLR trajectories under each RCP scenario.
 
 The two states of the world correspond to the **emissions pathway** the world follows:
@@ -268,8 +268,11 @@ end
 *Look at @fig-payoff.*
 
 1. *How do the optimal elevation heights differ between the two SLR futures? Why does this make intuitive sense?*
+For the low SLR scenario, the optimal elevation is 0, while the optimal decision for the high scenario is close to 7. this makes sense becasue under the low scenario, the expected damages are much lower, so construction costs are not justified. 
+
 2. *Why are the cost curves U-shaped? What happens at very low vs. very high elevation?*
-:::
+
+At very low elevation, the expected damages are unmitigated while the construction cost remains low. At the high end, this is reversed, resulting in a U-shaped curve.
 
 
 ## Computing EVPI
@@ -284,21 +287,37 @@ $$
 where $a$ is the elevation height, $s$ is the SLR state, $p(s)$ is the prior probability, and $C(a, s)$ is total cost.
 
 ```{julia}
-# Your code here
+height_grid = 0.0:0.5:14.0
+
+costs_low = [compute_total_cost(config, scenario_low, h) for h in height_grid]
+costs_high = [compute_total_cost(config, scenario_high, h) for h in height_grid]
+costs_prior = p_high .* costs_high .+ p_low .* costs_low
+
+EVPI = minimum(costs_prior) - (p_low * minimum(costs_low) + p_high * minimum(costs_high))
 ```
 
 ```{julia}
 #| label: tbl-evpi
 #| tbl-cap: "EVPI for the elevation decision under SLR uncertainty"
-# Your code here
+DataFrame(
+    EVPI = EVPI,
+    EVPI_as_fraction_of_house_value = EVPI / house.value_usd,
+)
+
 ```
 
 ::: {.callout-tip appearance="simple" icon=false title="Your Response — Question 2"}
 *Look at @tbl-evpi.*
 
-1. *Interpret the EVPI in dollars. How much would this homeowner pay for a perfect forecast of the future emissions pathway?*
+1. *Interpret the EVPI in dollars. How much would this homeowner pay for a perfect forecast of the future emissions pathway?* A homeowner would be willing to pay 2,2047 dollars for a perfect forecast of the future emissions pathway. 
+
 2. *What fraction of the house value ($250,000) does the EVPI represent?*
+The EVPI represents 8.8% of the house value.
+
 3. *Is this EVPI large enough to justify funding climate policy research? What other homeowners might benefit from the same information?*
+
+This EVPI is large enough to justify funding climate policy research, especially considering that the same information would benefit millions of homeowners in coastal areas around the world who face similar SLR risks. The aggregated value of this information across all affected homeowners could be substantial, making it a worthwhile investment for society as a whole.
+
 :::
 
 
@@ -320,7 +339,11 @@ p_ontrack_given_26 = 0.90    # P(report = "on track" | RCP 2.6)
 Use Bayes' rule to compute the posterior probability of RCP 8.5 given each report signal.
 
 ```{julia}
-# Your code here
+p_offtrack = p_offtrack_given_85 * p_high + (1 - p_ontrack_given_26) * p_low
+p_ontrack = (1 - p_offtrack_given_85) * p_high + p_ontrack_given_26 * p_low
+
+p_85_given_offtrack = (p_offtrack_given_85 * p_high) / p_offtrack
+p_26_given_ontrack = (p_ontrack_given_26 * p_low) / p_ontrack
 ```
 
 ### Exercise: EVII
@@ -335,26 +358,62 @@ $$
 where $z$ is the report signal and $p(s|z)$ is the posterior from Bayes' rule.
 
 ```{julia}
-# Your code here
+expected_with_posterior_info = p_offtrack * minimum(p_85_given_offtrack * costs_high .+ (1 - p_85_given_offtrack) * costs_low) + p_ontrack * minimum(p_26_given_ontrack * costs_low .+ (1 - p_26_given_ontrack) * costs_high)
+
+EVII = minimum(costs_prior) - expected_with_posterior_info
 ```
 
 ```{julia}
 #| label: tbl-voi
 #| tbl-cap: "Summary of information value: no information, policy report, and perfect information"
-# Your code here
+DataFrame(
+    Scenario = ["No Info", "Policy Report", "Perfect Info"],
+    Cost = [minimum(costs_prior), expected_with_posterior_info, p_low * minimum(costs_low) + p_high * minimum(costs_high)],
+    Value_of_Info = [0.0, EVII, EVPI],
+)
 ```
 
 ```{julia}
 #| label: fig-evii
 #| fig-cap: "Posterior-weighted cost curves after the policy report. Green: 'off track' signal shifts beliefs toward RCP 8.5. Orange: 'on track' signal shifts beliefs toward RCP 2.6. Stars mark the conditional optima."
-# Your code here
+let
+    fig = Figure(; size=(700, 450))
+    ax = Axis(
+        fig[1, 1];
+        xlabel="Elevation Height (ft)",
+        ylabel="Total Cost (USD)",
+        title="Cost Curves with Policy Report Signals",
+    )
+
+    # Re-weight cost curves with posteriors
+    costs_offtrack = p_85_given_offtrack * costs_high .+ (1 - p_85_given_offtrack) * costs_low
+    costs_ontrack = p_26_given_ontrack * costs_low .+ (1 - p_26_given_ontrack) * costs_high
+
+    lines!(ax, height_grid, costs_offtrack; color=:green, linewidth=2, label="Report: 'Off Track'")
+    lines!(ax, height_grid, costs_ontrack; color=:orange, linewidth=2, label="Report: 'On Track'")
+
+    # Mark optima
+    idx_offtrack = argmin(costs_offtrack)
+    idx_ontrack = argmin(costs_ontrack)
+
+    scatter!(ax, [height_grid[idx_offtrack]], [costs_offtrack[idx_offtrack]]; color=:green, markersize=15, marker=:star5)
+    scatter!(ax, [height_grid[idx_ontrack]], [costs_ontrack[idx_ontrack]]; color=:orange, markersize=15, marker=:star5)
+
+    axislegend(ax; position=:rt)
+    fig
+end
 ```
 
 ::: {.callout-tip appearance="simple" icon=false title="Your Response — Question 3"}
 *What fraction of the EVPI does the policy report capture?
+The policy report captures approximately 50% of the EVPI, indicating that while it provides valuable information, it is not as informative as perfect information.
+
 Why is EVII < EVPI?
-What would make the report more valuable?*
-:::
+Because the policy report is imperfect and does not perfectly predict the future emissions pathway, it cannot capture all the value of perfect information. The inaccuracies in the report reduce its ability to change the optimal decision as effectively as perfect information would, resulting in a lower EVII compared to EVPI.
+
+What would make the report more valuable?
+The report would be more valuable if it had higher accuracy in predicting the future emissions pathway, or if it provided more precise information about the likelihood of different scenarios. Additionally, if the report could be updated more frequently as new data becomes available, it could help homeowners make more informed decisions over time, increasing its value.
+::!
 
 
 ::: {.callout-tip appearance="simple" icon=false title="Your Response — Question 4"}
@@ -363,8 +422,9 @@ What would make the report more valuable?*
 1. *Fund a climate policy analysis that would perfectly predict the future emissions pathway.*
 2. *Fund a tide gauge network that would reduce storm surge uncertainty.*
 
-*Based on your EVPI result, what is the maximum value of investment (1)?
+*Based on your EVPI result, what is the maximum value of investment (1)? The maximum value of investment (1) is equal to the EVPI, which represents the maximum amount the homeowner would be willing to pay for perfect information about the future emissions pathway. This value can be directly compared to the cost of funding the climate policy analysis to determine if it is a worthwhile investment.*
 Why might investment (2) have a different (possibly larger or smaller) ceiling?*
+Investment (2) might have a different ceiling because it addresses a different source of uncertainty (storm surge) that may have a different impact on the homeowner's decision compared to the uncertainty about future emissions pathways. The value of reducing storm surge uncertainty would depend on how much it changes the expected damages and optimal elevation decision, which could be more or less significant than the value of knowing the future emissions pathway. Therefore, the maximum value of investment (2) could be larger or smaller than that of investment (1) based on its influence on the decision-making process and potential cost savings.
 :::
 
 
@@ -384,6 +444,7 @@ Key takeaways from this lab:
 2. **EVII** extends EVPI to imperfect signals via Bayes' rule — re-weight the same payoff table with posterior beliefs, no new simulations needed.
 3. **Information is only valuable when it changes the optimal decision.** If the optimal action is the same regardless of the state, EVPI is zero.
 4. The EVPI for one uncertainty bounds the value of any research into that uncertainty — use it to prioritize research investments.
+
 
 ## Submission {#sec-submission}
 
